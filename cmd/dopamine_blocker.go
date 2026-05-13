@@ -38,7 +38,14 @@ func main() {
 func printUsage() {
 	fmt.Println("Dopamine Locker")
 	fmt.Println("Usage:")
-	fmt.Println("  dopelock daemon         - Start the background worker (Requires Root)")
-	fmt.Println("  dopelock block <site>   - Block a website")
-	fmt.Println("  dopelock unlock <site>  - Unlock a website temporarily")
+	fmt.Println("  dopelock daemon                      - Start the background worker (Requires Root)")
+	fmt.Println("  dopelock block --url <url>           - Lock a specific URL")
+	fmt.Println("  dopelock block --group <name>        - Lock a specific group")
+	fmt.Println("  dopelock block --all                 - Lock all sites")
+	fmt.Println("  dopelock unlock --url <url>          - Unlock a specific URL")
+	fmt.Println("  dopelock unlock --group <name>       - Unlock a specific group")
+	fmt.Println("  dopelock unlock --all                - Unlock all sites")
+	fmt.Println("")
+	fmt.Println("Short forms:")
+	fmt.Println("  -u, --url   |   -g, --group   |   -a, --all")
 }

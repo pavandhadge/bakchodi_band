@@ -68,9 +68,12 @@ func runDaemon() {
 	defer listener.Close()
 
 	// 3. Set file permissions so only root can write to the socket (Security!)
-	os.Chmod(SOCKET_PATH, 0600)
+	// Note: os.Chmod doesn't work properly on Windows for socket files
+	if runtime.GOOS != "windows" {
+		os.Chmod(SOCKET_PATH, 0600)
+	}
 
-	// 4. Define the HTTP route and what to do when a message arrives
+// 4. Define the HTTP route and what to do when a message arrives
 	http.HandleFunc("/unlock", handleFullUnlock)
 	http.HandleFunc("/unlock-group", handleGroupUnlock)
 	http.HandleFunc("/unlock-url", handleURLUnlock)
@@ -79,11 +82,53 @@ func runDaemon() {
 	http.HandleFunc("/lock-url", handleURLLock)
 	http.HandleFunc("/add-group", handleAddGroup)
 	http.HandleFunc("/add-url-to-group", handleAddURLToGroup)
-	
 
-	// 5. Start the server (This blocks forever)
+	// 5. Start background ticker to check for expired unlocks
+	go runExpiryChecker()
+
+	// 6. Start the server (This blocks forever)
 	fmt.Println("Daemon listening on", SOCKET_PATH)
 	http.Serve(listener, nil)
+}
+
+func runExpiryChecker() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+		cleanupExpiredUnlocks()
+	}
+}
+
+func cleanupExpiredUnlocks() {
+	state, err := loadState()
+	if err != nil || len(state.ActiveUnlocks) == 0 {
+		return
+	}
+
+	groups, _ := loadGroups()
+	now := time.Now()
+	changed := false
+
+	var validUnlocks []UnlockState
+	for _, unlock := range state.ActiveUnlocks {
+		if now.Before(unlock.Expiry) {
+			validUnlocks = append(validUnlocks, unlock)
+		} else {
+			changed = true
+			fmt.Printf("🔒 Expired: %s (%s)\n", unlock.Target, unlock.Type)
+		}
+	}
+
+	if changed {
+		state.ActiveUnlocks = validUnlocks
+		saveState(state)
+
+		remainingBlocks := calculateBlocklist(groups, state.ActiveUnlocks)
+		syncHostsFile(remainingBlocks)
+		fmt.Println("✅ Expired unlocks cleaned up and sites re-blocked")
+	}
 }
 
 
