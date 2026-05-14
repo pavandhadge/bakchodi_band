@@ -9,15 +9,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pavandhadge/dopamine_blocker/internal/model"
 )
 
-func ApplyResistance(targetType, target string) {
+func ApplyResistance(targetType, target string, policy model.FrictionPolicy) {
 	waitSeconds, targetName, ok := resistanceTarget(targetType, target)
 	if !ok {
 		return
 	}
+	waitSeconds += policy.ExtraWait
 
 	fmt.Printf("\nYou're about to unlock %s\n", targetName)
+	if policy.AttemptsToday > 0 {
+		fmt.Printf("Escalation: %d unlock attempt(s) today, adding %d seconds and %d challenge(s).\n", policy.AttemptsToday, policy.ExtraWait, policy.Challenges)
+	}
 	fmt.Printf("Wait %d seconds to confirm you really want this...\n\n", waitSeconds)
 	for i := waitSeconds; i > 0; i-- {
 		fmt.Printf("\rTime remaining: %2d seconds ", i)
@@ -25,10 +31,11 @@ func ApplyResistance(targetType, target string) {
 	}
 	fmt.Println("\n\nTime's up.")
 
-	const (
+	requiredCorrect := policy.Challenges
+	if requiredCorrect < 3 {
 		requiredCorrect = 3
-		maxMistakes     = 3
-	)
+	}
+	maxMistakes := 3
 
 	reader := bufio.NewReader(os.Stdin)
 	mistakes := 0
@@ -67,6 +74,26 @@ func ApplyResistance(targetType, target string) {
 
 	fmt.Println("\nToo many failed attempts. Unlock cancelled.")
 	os.Exit(0)
+}
+
+func ApplyBreakGlassResistance(targetType, target string, policy model.FrictionPolicy) {
+	waitSeconds, targetName, ok := resistanceTarget(targetType, target)
+	if !ok {
+		return
+	}
+	waitSeconds *= 3
+
+	fmt.Printf("\nBREAK GLASS unlock requested for %s\n", targetName)
+	fmt.Printf("This bypasses normal budget/commitment checks, is limited to %d minutes, and is logged.\n", 5)
+	fmt.Printf("Wait %d seconds and solve all challenges to continue.\n\n", waitSeconds)
+	for i := waitSeconds; i > 0; i-- {
+		fmt.Printf("\rTime remaining: %2d seconds ", i)
+		time.Sleep(1 * time.Second)
+	}
+	fmt.Println("\n\nBreak-glass delay complete.")
+	policy.ExtraWait += 120
+	policy.Challenges += 2
+	ApplyResistance(targetType, target, policy)
 }
 
 func resistanceTarget(targetType, target string) (int, string, bool) {

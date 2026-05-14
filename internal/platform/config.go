@@ -15,12 +15,21 @@ type Config struct {
 	GroupsPath    string
 }
 
+const (
+	NetworkTCP  = "tcp"
+	NetworkUnix = "unix"
+)
+
 func DefaultConfig() Config {
 	cfg := Config{OS: runtime.GOOS}
 	cfg.HostPath = hostsFilePath(cfg.OS)
 	cfg.SocketNetwork, cfg.SocketAddress = socketAddress(cfg.OS)
 	cfg.StatePath, cfg.GroupsPath = stateAndGroupsPath(cfg.OS)
 	return cfg
+}
+
+func (c Config) UsesUnixSocket() bool {
+	return c.SocketNetwork == NetworkUnix
 }
 
 func hostsFilePath(goos string) string {
@@ -41,25 +50,25 @@ func hostsFilePath(goos string) string {
 func socketAddress(goos string) (string, string) {
 	switch goos {
 	case "windows":
-		return "tcp", "127.0.0.1:47321"
+		return NetworkTCP, "127.0.0.1:47321"
 	case "darwin", "linux":
-		return "unix", "/var/run/dopelock.sock"
+		return NetworkUnix, "/var/run/bakchodi.sock"
 	default:
-		return "unix", "/tmp/dopelock.sock"
+		return NetworkUnix, "/tmp/bakchodi.sock"
 	}
 }
 
 func stateAndGroupsPath(goos string) (string, string) {
 	switch goos {
 	case "windows":
-		base := filepath.Join(os.Getenv("ProgramData"), "dopelock")
+		base := filepath.Join(os.Getenv("ProgramData"), "bakchodi_band")
 		if os.Getenv("ProgramData") == "" {
-			base = `C:\ProgramData\dopelock`
+			base = `C:\ProgramData\bakchodi_band`
 		}
 		return filepath.Join(base, "state.json"), filepath.Join(base, "groups.json")
 	case "darwin", "linux":
-		return "/var/lib/dopelock/state.json", "/var/lib/dopelock/groups.json"
+		return "/var/lib/bakchodi_band/state.json", "/var/lib/bakchodi_band/groups.json"
 	default:
-		return "/tmp/dopelock/state.json", "/tmp/dopelock/groups.json"
+		return "/tmp/bakchodi_band/state.json", "/tmp/bakchodi_band/groups.json"
 	}
 }

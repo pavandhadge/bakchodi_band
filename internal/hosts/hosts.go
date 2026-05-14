@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	startMarker = "# --- DOPAMINE-LOCK-START ---"
-	endMarker   = "# --- DOPAMINE-LOCK-END ---"
+	startMarker = "# --- BAKCHODI-BAND-START ---"
+	endMarker   = "# --- BAKCHODI-BAND-END ---"
 )
 
 func Sync(path string, urlsToBlock []string) error {

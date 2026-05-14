@@ -39,7 +39,7 @@ func (d Daemon) Run() error {
 		return fmt.Errorf("prepare data directories: %w", err)
 	}
 
-	if d.Config.SocketNetwork == "unix" {
+	if d.Config.UsesUnixSocket() {
 		_ = os.Remove(d.Config.SocketAddress)
 	}
 
@@ -49,7 +49,7 @@ func (d Daemon) Run() error {
 	}
 	defer listener.Close()
 
-	if d.Config.SocketNetwork == "unix" {
+	if d.Config.UsesUnixSocket() {
 		_ = os.Chmod(d.Config.SocketAddress, 0600)
 	}
 
@@ -62,6 +62,10 @@ func (d Daemon) Run() error {
 	mux.HandleFunc("/lock-url", d.handleURLLock)
 	mux.HandleFunc("/add-group", d.handleAddGroup)
 	mux.HandleFunc("/add-url-to-group", d.handleAddURLToGroup)
+	mux.HandleFunc("/import-groups", d.handleImportGroups)
+	mux.HandleFunc("/import-config", d.handleImportConfig)
+	mux.HandleFunc("/commit", d.handleCommit)
+	mux.HandleFunc("/friction", d.handleFriction)
 
 	go d.runExpiryChecker()
 
@@ -141,12 +145,25 @@ func calculateBlocklist(allGroups model.GroupMap, activeUnlocks []model.UnlockSt
 }
 
 func (d Daemon) handleFullUnlock(w http.ResponseWriter, r *http.Request) {
-	expiryTime := time.Now().Add(time.Duration(model.DefaultTimeLimitMinutes) * time.Minute)
-	currentState := model.StateJSON{ActiveUnlocks: []model.UnlockState{{
+	var req model.UnlockRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	currentState, ok := d.authorizeUnlock(w, "all", "all", req)
+	if !ok {
+		return
+	}
+
+	duration := currentState.UnlockMinutes
+	if req.BreakGlass {
+		duration = currentState.BreakGlassMinutes
+	}
+	expiryTime := time.Now().Add(time.Duration(duration) * time.Minute)
+	currentState.ActiveUnlocks = []model.UnlockState{{
 		Target: "all",
 		Type:   "all",
 		Expiry: expiryTime,
-	}}}
+	}}
+	d.recordAllowedUnlock(&currentState, "all", "all", req, duration)
 
 	if err := d.Store.SaveState(currentState); err != nil {
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
@@ -168,15 +185,22 @@ func (d Daemon) handleURLUnlock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Daemon) handleScopedUnlock(w http.ResponseWriter, r *http.Request, unlockType string) {
-	var req model.UnlockState
+	var req model.UnlockRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	currentState, _ := d.Store.LoadState()
+	currentState, ok := d.authorizeUnlock(w, unlockType, req.Target, req)
+	if !ok {
+		return
+	}
 	groups, _ := d.Store.LoadGroups()
-	expiryTime := time.Now().Add(time.Duration(model.DefaultTimeLimitMinutes) * time.Minute)
+	duration := currentState.UnlockMinutes
+	if req.BreakGlass {
+		duration = currentState.BreakGlassMinutes
+	}
+	expiryTime := time.Now().Add(time.Duration(duration) * time.Minute)
 	newUnlock := model.UnlockState{Target: req.Target, Type: unlockType, Expiry: expiryTime}
 
 	updated := false
@@ -190,6 +214,7 @@ func (d Daemon) handleScopedUnlock(w http.ResponseWriter, r *http.Request, unloc
 	if !updated {
 		currentState.ActiveUnlocks = append(currentState.ActiveUnlocks, newUnlock)
 	}
+	d.recordAllowedUnlock(&currentState, unlockType, req.Target, req, duration)
 
 	if err := d.Store.SaveState(currentState); err != nil {
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
@@ -257,13 +282,8 @@ func (d Daemon) handleScopedLock(w http.ResponseWriter, r *http.Request, unlockT
 	fmt.Fprintf(w, "%s '%s' locked\n", unlockType, req.Target)
 }
 
-type groupRequest struct {
-	GroupName string   `json:"group_name"`
-	URLs      []string `json:"urls"`
-}
-
 func (d Daemon) handleAddGroup(w http.ResponseWriter, r *http.Request) {
-	var req groupRequest
+	var req model.GroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -313,4 +333,175 @@ func (d Daemon) handleAddURLToGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprintf(w, "URL '%s' added to group '%s'\n", req.URL, req.GroupName)
+}
+
+func (d Daemon) handleImportGroups(w http.ResponseWriter, r *http.Request) {
+	var req model.GroupsImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Groups == nil {
+		http.Error(w, "groups are required", http.StatusBadRequest)
+		return
+	}
+
+	groups := req.Groups
+	if req.Merge {
+		existing, err := d.Store.LoadGroups()
+		if err == nil {
+			for name, urls := range req.Groups {
+				existing[name] = urls
+			}
+			groups = existing
+		}
+	}
+
+	if err := d.Store.SaveGroups(groups); err != nil {
+		http.Error(w, "Failed to save groups", http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, "Imported %d groups\n", len(req.Groups))
+}
+
+func (d Daemon) handleImportConfig(w http.ResponseWriter, r *http.Request) {
+	var cfg model.ConfigFile
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if cfg.Groups != nil {
+		if err := d.Store.SaveGroups(cfg.Groups); err != nil {
+			http.Error(w, "Failed to save groups", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	currentState, _ := d.Store.LoadState()
+	if cfg.Policy.DailyBudgetMinutes > 0 {
+		currentState.DailyBudgetMinutes = cfg.Policy.DailyBudgetMinutes
+	}
+	if cfg.Policy.UnlockMinutes > 0 {
+		currentState.UnlockMinutes = cfg.Policy.UnlockMinutes
+	}
+	if cfg.Policy.BreakGlassMinutes > 0 {
+		currentState.BreakGlassMinutes = cfg.Policy.BreakGlassMinutes
+	}
+	if err := d.Store.SaveState(currentState); err != nil {
+		http.Error(w, "Failed to save state", http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, "Imported config with %d groups\n", len(cfg.Groups))
+}
+
+func (d Daemon) authorizeUnlock(w http.ResponseWriter, unlockType, target string, req model.UnlockRequest) (model.StateJSON, bool) {
+	currentState, _ := d.Store.LoadState()
+	today := time.Now().Format("2006-01-02")
+	currentState.UnlockAttemptsByDate[today]++
+
+	if req.Reason == "" {
+		d.recordDeniedUnlock(&currentState, unlockType, target, req, "reason is required")
+		_ = d.Store.SaveState(currentState)
+		http.Error(w, "Reason is required", http.StatusBadRequest)
+		return currentState, false
+	}
+
+	if req.BreakGlass {
+		return currentState, true
+	}
+
+	if time.Now().Before(currentState.CommitmentUntil) {
+		msg := fmt.Sprintf("commitment active until %s", currentState.CommitmentUntil.Format(time.RFC3339))
+		d.recordDeniedUnlock(&currentState, unlockType, target, req, msg)
+		_ = d.Store.SaveState(currentState)
+		http.Error(w, msg, http.StatusLocked)
+		return currentState, false
+	}
+
+	used := currentState.UsedBudgetByDate[today]
+	if used+currentState.UnlockMinutes > currentState.DailyBudgetMinutes {
+		msg := fmt.Sprintf("daily unlock budget exceeded: used %d/%d minutes", used, currentState.DailyBudgetMinutes)
+		d.recordDeniedUnlock(&currentState, unlockType, target, req, msg)
+		_ = d.Store.SaveState(currentState)
+		http.Error(w, msg, http.StatusTooManyRequests)
+		return currentState, false
+	}
+
+	return currentState, true
+}
+
+func (d Daemon) recordAllowedUnlock(st *model.StateJSON, unlockType, target string, req model.UnlockRequest, minutes int) {
+	today := time.Now().Format("2006-01-02")
+	if !req.BreakGlass {
+		st.UsedBudgetByDate[today] += minutes
+	}
+	st.AuditEvents = append(st.AuditEvents, model.AuditEvent{
+		Time:       time.Now(),
+		Action:     "unlock",
+		Target:     target,
+		Type:       unlockType,
+		Reason:     req.Reason,
+		Allowed:    true,
+		BreakGlass: req.BreakGlass,
+		Message:    fmt.Sprintf("%d minute unlock", minutes),
+	})
+}
+
+func (d Daemon) recordDeniedUnlock(st *model.StateJSON, unlockType, target string, req model.UnlockRequest, message string) {
+	st.AuditEvents = append(st.AuditEvents, model.AuditEvent{
+		Time:       time.Now(),
+		Action:     "unlock",
+		Target:     target,
+		Type:       unlockType,
+		Reason:     req.Reason,
+		Allowed:    false,
+		BreakGlass: req.BreakGlass,
+		Message:    message,
+	})
+}
+
+func (d Daemon) handleCommit(w http.ResponseWriter, r *http.Request) {
+	var req model.CommitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Hours <= 0 {
+		http.Error(w, "commit hours must be greater than zero", http.StatusBadRequest)
+		return
+	}
+	if req.Reason == "" {
+		http.Error(w, "reason is required", http.StatusBadRequest)
+		return
+	}
+
+	currentState, _ := d.Store.LoadState()
+	currentState.CommitmentUntil = time.Now().Add(time.Duration(req.Hours) * time.Hour)
+	currentState.AuditEvents = append(currentState.AuditEvents, model.AuditEvent{
+		Time:    time.Now(),
+		Action:  "commit",
+		Target:  "all",
+		Type:    "commitment",
+		Reason:  req.Reason,
+		Allowed: true,
+		Message: fmt.Sprintf("commitment active until %s", currentState.CommitmentUntil.Format(time.RFC3339)),
+	})
+	if err := d.Store.SaveState(currentState); err != nil {
+		http.Error(w, "Failed to save state", http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, "Commitment active until %s\n", currentState.CommitmentUntil.Format(time.RFC3339))
+}
+
+func (d Daemon) handleFriction(w http.ResponseWriter, r *http.Request) {
+	currentState, _ := d.Store.LoadState()
+	attempts := currentState.UnlockAttemptsByDate[time.Now().Format("2006-01-02")]
+	policy := model.FrictionPolicy{
+		AttemptsToday: attempts,
+		ExtraWait:     attempts * 60,
+		Challenges:    3 + attempts,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(policy)
 }
