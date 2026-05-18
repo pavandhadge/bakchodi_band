@@ -504,6 +504,8 @@ func (m Model) View() string {
 	} else if m.mode == modeReason {
 		b.WriteString(m.reasonView())
 	} else {
+		b.WriteString(mutedStyle.Render(m.commandDescription()))
+		b.WriteString("\n\n")
 		b.WriteString(m.commandForm())
 	}
 	b.WriteString("\n\n")
@@ -520,7 +522,7 @@ func (m Model) View() string {
 
 	b.WriteString("\n\n")
 	if m.mode == modeForm {
-		b.WriteString(mutedStyle.Render("up/down: move  left/right: change  enter: next/run  r: refresh  q: quit"))
+		b.WriteString(mutedStyle.Render("up/down: move  left/right: change choice  enter: next/run  r: refresh  q: quit"))
 	} else if m.mode == modeChallenge {
 		b.WriteString(mutedStyle.Render("enter: answer  q: quit"))
 	} else if m.mode == modeReason {
@@ -590,6 +592,7 @@ func (m Model) commandForm() string {
 		rows = append(rows, m.row(fieldReason, "reason", m.reasonInput.View()))
 	}
 	rows = append(rows, m.row(fieldSubmit, "run", "execute"))
+	rows = append(rows, "", mutedStyle.Render(m.fieldHelp()))
 	return strings.Join(rows, "\n")
 }
 
@@ -615,6 +618,58 @@ func (m Model) groupsLine() string {
 		names = append(names[:8], fmt.Sprintf("+%d more", len(names)-8))
 	}
 	return mutedStyle.Render("groups: " + strings.Join(names, ", "))
+}
+
+func (m Model) commandDescription() string {
+	switch m.command {
+	case commandBlock:
+		return "Block access by locking one URL, one saved group, or every saved group."
+	case commandAllow:
+		return "Temporarily unlock access. This will force a wait, math checks, and then ask for a reason."
+	case commandPanic:
+		return "Emergency unlock. This is slower, stricter, limited to a short window, and logged."
+	case commandPlan:
+		return "Create a no-break commitment so normal unlocks are blocked for the chosen hours."
+	default:
+		return ""
+	}
+}
+
+func (m Model) fieldHelp() string {
+	switch m.currentField() {
+	case fieldCommand:
+		return "Choose what you want to do."
+	case fieldTarget:
+		return "Choose whether this affects one URL, a saved group, or everything."
+	case fieldValue:
+		if m.target == targetGroup {
+			return "Enter the saved group name, for example social or video."
+		}
+		return "Enter a domain or URL, for example youtube.com."
+	case fieldHours:
+		return "Choose how long the commitment should last. Use left/right or +/-."
+	case fieldReason:
+		return "Enter the reason that will be logged."
+	case fieldSubmit:
+		return m.submitHelp()
+	default:
+		return ""
+	}
+}
+
+func (m Model) submitHelp() string {
+	switch m.command {
+	case commandBlock:
+		return "Execute now. Blocking does not require wait or math checks."
+	case commandAllow:
+		return "Start unlock flow: wait, solve math, enter reason, then unlock."
+	case commandPanic:
+		return "Start emergency flow: longer wait, harder math, enter reason, then unlock."
+	case commandPlan:
+		return "Create the commitment with the selected hours and reason."
+	default:
+		return "Execute the selected action."
+	}
 }
 
 func (m Model) waitView() string {
