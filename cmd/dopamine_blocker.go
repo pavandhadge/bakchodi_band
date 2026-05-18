@@ -9,16 +9,25 @@ import (
 	"github.com/pavandhadge/dopamine_blocker/internal/client"
 	"github.com/pavandhadge/dopamine_blocker/internal/daemon"
 	"github.com/pavandhadge/dopamine_blocker/internal/platform"
+	"github.com/pavandhadge/dopamine_blocker/internal/tui"
 )
 
 func main() {
+	cfg := platform.DefaultConfig()
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+		if err := tui.Run(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+		return
 	}
 
-	cfg := platform.DefaultConfig()
 	switch os.Args[1] {
+	case "tui":
+		if err := tui.Run(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
 	case "band", "start", "daemon":
 		if err := daemon.New(cfg).Run(); err != nil {
 			fmt.Fprintln(os.Stderr, "FATAL:", err)
@@ -199,6 +208,7 @@ func parseTargetFlags(command string, args []string) (string, string) {
 func printUsage() {
 	fmt.Println("bakchodi_band")
 	fmt.Println("Usage:")
+	fmt.Println("  bakchodi tui                         - Launch the interactive TUI")
 	fmt.Println("  bakchodi band                        - Start the background blocker as admin/root")
 	fmt.Println("  bakchodi block --url youtube.com     - Block one site")
 	fmt.Println("  bakchodi block --group social        - Block a saved group")

@@ -1,6 +1,8 @@
 package hosts
 
 import (
+	"net"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -49,9 +51,48 @@ func buildBlock(urls []string) []string {
 	}
 
 	block := []string{startMarker}
-	for _, url := range urls {
-		block = append(block, "127.0.0.1 "+url)
-		block = append(block, "127.0.0.1 www."+url)
+	seen := make(map[string]bool)
+	for _, rawURL := range urls {
+		host := normalizeHost(rawURL)
+		if host == "" {
+			continue
+		}
+
+		for _, name := range hostVariants(host) {
+			for _, target := range []string{"0.0.0.0", "::1"} {
+				line := target + " " + name
+				if !seen[line] {
+					block = append(block, line)
+					seen[line] = true
+				}
+			}
+		}
 	}
 	return append(block, endMarker)
+}
+
+func normalizeHost(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return ""
+	}
+	return strings.TrimPrefix(host, "www.")
+}
+
+func hostVariants(host string) []string {
+	if net.ParseIP(host) != nil {
+		return []string{host}
+	}
+	return []string{host, "www." + host}
 }

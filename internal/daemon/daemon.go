@@ -50,7 +50,7 @@ func (d Daemon) Run() error {
 	defer listener.Close()
 
 	if d.Config.UsesUnixSocket() {
-		_ = os.Chmod(d.Config.SocketAddress, 0600)
+		_ = os.Chmod(d.Config.SocketAddress, 0666)
 	}
 
 	mux := http.NewServeMux()
@@ -66,6 +66,8 @@ func (d Daemon) Run() error {
 	mux.HandleFunc("/import-config", d.handleImportConfig)
 	mux.HandleFunc("/commit", d.handleCommit)
 	mux.HandleFunc("/friction", d.handleFriction)
+	mux.HandleFunc("/state", d.handleState)
+	mux.HandleFunc("/groups", d.handleGroups)
 
 	go d.runExpiryChecker()
 
@@ -504,4 +506,16 @@ func (d Daemon) handleFriction(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(policy)
+}
+
+func (d Daemon) handleState(w http.ResponseWriter, r *http.Request) {
+	currentState, _ := d.Store.LoadState()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(currentState)
+}
+
+func (d Daemon) handleGroups(w http.ResponseWriter, r *http.Request) {
+	groups, _ := d.Store.LoadGroups()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(groups)
 }
