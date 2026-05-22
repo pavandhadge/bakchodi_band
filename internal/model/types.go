@@ -22,7 +22,7 @@ type StateJSON struct {
 	DailyBudgetMinutes   int            `json:"daily_budget_minutes"`
 	UnlockMinutes        int            `json:"unlock_minutes"`
 	BreakGlassMinutes    int            `json:"break_glass_minutes"`
-	BlockDoHProviders    bool           `json:"block_doh_providers"`
+	AdvancedProtection    bool           `json:"advanced_protection"`
 	UsedBudgetByDate     map[string]int `json:"used_budget_by_date"`
 	CommitmentUntil      time.Time      `json:"commitment_until"`
 	UnlockAttemptsByDate map[string]int `json:"unlock_attempts_by_date"`
@@ -61,7 +61,7 @@ type PolicyConfig struct {
 	DailyBudgetMinutes int  `json:"daily_budget_minutes"`
 	UnlockMinutes      int  `json:"unlock_minutes"`
 	BreakGlassMinutes  int  `json:"break_glass_minutes"`
-	BlockDoHProviders  bool `json:"block_doh_providers"`
+	AdvancedProtection  bool `json:"advanced_protection"`
 }
 
 type ConfigFile struct {

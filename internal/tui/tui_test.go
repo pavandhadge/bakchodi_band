@@ -98,8 +98,8 @@ func TestAllowFlowMatchesCLIOrder(t *testing.T) {
 	if m.waitRemaining != 35 {
 		t.Fatalf("allow URL wait mismatch: got %d, want 35", m.waitRemaining)
 	}
-	if m.required != 3 {
-		t.Fatalf("allow must require at least 3 challenges, got %d", m.required)
+	if m.required != 2 {
+		t.Fatalf("allow must require %d challenges (from policy), got %d", m.policy.Challenges, m.required)
 	}
 	if m.pending.reason != "" {
 		t.Fatalf("reason should not be collected before friction, got %q", m.pending.reason)

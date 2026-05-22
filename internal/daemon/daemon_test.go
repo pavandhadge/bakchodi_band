@@ -210,7 +210,7 @@ func TestHandleFullLockPreservesState(t *testing.T) {
 		DailyBudgetMinutes:   99,
 		UnlockMinutes:        33,
 		BreakGlassMinutes:    7,
-		BlockDoHProviders:    true,
+		AdvancedProtection:    true,
 		UnlockAttemptsByDate: map[string]int{"2026-01-01": 5},
 		UsedBudgetByDate:     map[string]int{"2026-01-01": 50},
 		CommitmentUntil:      now.Add(2 * time.Hour),
@@ -244,8 +244,8 @@ func TestHandleFullLockPreservesState(t *testing.T) {
 	if stateAfter.BreakGlassMinutes != 7 {
 		t.Fatalf("break glass minutes was reset: got %d, want 7", stateAfter.BreakGlassMinutes)
 	}
-	if !stateAfter.BlockDoHProviders {
-		t.Fatal("block_doh_providers was reset")
+	if !stateAfter.AdvancedProtection {
+		t.Fatal("advanced_protection was reset")
 	}
 }
 
@@ -457,7 +457,7 @@ func TestImportConfig(t *testing.T) {
 			DailyBudgetMinutes: 200,
 			UnlockMinutes:      30,
 			BreakGlassMinutes:  10,
-			BlockDoHProviders:  true,
+			AdvancedProtection:  true,
 		},
 		Groups: model.GroupMap{"test": {"test.com"}},
 	})
@@ -479,8 +479,8 @@ func TestImportConfig(t *testing.T) {
 	if st.BreakGlassMinutes != 10 {
 		t.Fatalf("break glass: got %d, want 10", st.BreakGlassMinutes)
 	}
-	if !st.BlockDoHProviders {
-		t.Fatal("block_doh_providers should be true")
+	if !st.AdvancedProtection {
+		t.Fatal("advanced_protection should be true")
 	}
 
 	groups, _ := store.LoadGroups()
@@ -561,8 +561,8 @@ func TestHandleFrictionEndpoint(t *testing.T) {
 	if policy.ExtraWait != 180 {
 		t.Fatalf("extra wait: got %d, want 180", policy.ExtraWait)
 	}
-	if policy.Challenges != 6 {
-		t.Fatalf("challenges: got %d, want 6", policy.Challenges)
+	if policy.Challenges != 4 {
+		t.Fatalf("challenges: got %d, want 4", policy.Challenges)
 	}
 }
 

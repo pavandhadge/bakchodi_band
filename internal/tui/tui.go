@@ -441,9 +441,6 @@ func (m *Model) startResistance() {
 		return
 	}
 	policy := m.policy
-	if policy.Challenges == 0 {
-		policy.Challenges = friction.MinChallenges
-	}
 	waitSeconds := info.WaitSeconds + policy.ExtraWait
 	if m.pending.command == commandPanic {
 		waitSeconds = info.WaitSeconds*4 + policy.ExtraWait + 120
@@ -453,8 +450,8 @@ func (m *Model) startResistance() {
 	m.working = true
 	m.waitRemaining = waitSeconds
 	m.required = policy.Challenges
-	if m.required < friction.MinChallenges {
-		m.required = friction.MinChallenges
+	if m.required < 1 {
+		m.required = 1
 	}
 	m.solved = 0
 	m.mistakes = 0
@@ -546,8 +543,13 @@ func (m Model) statusLine() string {
 	if !m.loaded {
 		return mutedStyle.Render("status: loading")
 	}
+	prot := "basic"
+	if m.state.AdvancedProtection {
+		prot = "advanced"
+	}
+	protStr := mutedStyle.Render("  protection: " + prot)
 	if len(m.state.ActiveUnlocks) == 0 {
-		return badStyle.Render("status: blocked")
+		return badStyle.Render("status: blocked") + protStr
 	}
 	parts := []string{}
 	for _, unlock := range m.state.ActiveUnlocks {
@@ -558,9 +560,9 @@ func (m Model) statusLine() string {
 		parts = append(parts, fmt.Sprintf("%s:%s (%s)", unlock.Type, unlock.Target, left))
 	}
 	if len(parts) == 0 {
-		return badStyle.Render("status: blocked")
+		return badStyle.Render("status: blocked") + protStr
 	}
-	return goodStyle.Render("active unlocks: ") + strings.Join(parts, ", ")
+	return goodStyle.Render("active unlocks: ") + strings.Join(parts, ", ") + protStr
 }
 
 func (m Model) budgetLine() string {
@@ -765,11 +767,11 @@ func loadFriction(cfg platform.Config, token string) tea.Cmd {
 	return func() tea.Msg {
 		body, err := httpGet(cfg, "/friction", token)
 		if err != nil {
-			return frictionMsg{policy: model.FrictionPolicy{Challenges: friction.MinChallenges}}
+			return frictionMsg{policy: model.FrictionPolicy{Challenges: 1}}
 		}
 		var policy model.FrictionPolicy
 		if err := json.Unmarshal(body, &policy); err != nil || policy.Challenges == 0 {
-			return frictionMsg{policy: model.FrictionPolicy{Challenges: friction.MinChallenges}}
+			return frictionMsg{policy: model.FrictionPolicy{Challenges: 1}}
 		}
 		return frictionMsg{policy: policy}
 	}

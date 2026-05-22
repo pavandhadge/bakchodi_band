@@ -181,7 +181,7 @@ func (d *Daemon) cleanupExpiredUnlocks() {
 	if changed {
 		currentState.ActiveUnlocks = validUnlocks
 		_ = d.Store.SaveState(currentState)
-		_ = d.syncHostsAndDoH(calculateBlocklist(groups, currentState.ActiveUnlocks), currentState.BlockDoHProviders)
+		_ = d.syncProtection(calculateBlocklist(groups, currentState.ActiveUnlocks), currentState.AdvancedProtection)
 		fmt.Println("Expired unlocks cleaned up and sites re-blocked")
 	}
 }
@@ -249,7 +249,7 @@ func (d *Daemon) handleFullUnlock(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
 		return
 	}
-	if err := d.syncHostsAndDoH([]string{}, currentState.BlockDoHProviders); err != nil {
+	if err := d.syncProtection([]string{}, currentState.AdvancedProtection); err != nil {
 		http.Error(w, "Failed to update hosts file", http.StatusInternalServerError)
 		return
 	}
@@ -304,7 +304,7 @@ func (d *Daemon) handleScopedUnlock(w http.ResponseWriter, r *http.Request, unlo
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
 		return
 	}
-	if err := d.syncHostsAndDoH(calculateBlocklist(groups, currentState.ActiveUnlocks), currentState.BlockDoHProviders); err != nil {
+	if err := d.syncProtection(calculateBlocklist(groups, currentState.ActiveUnlocks), currentState.AdvancedProtection); err != nil {
 		http.Error(w, "Failed to update hosts file", http.StatusInternalServerError)
 		return
 	}
@@ -338,7 +338,7 @@ func (d *Daemon) handleFullLock(w http.ResponseWriter, r *http.Request) {
 		allURLs = append(allURLs, urls...)
 	}
 
-	if err := d.syncHostsAndDoH(allURLs, currentState.BlockDoHProviders); err != nil {
+	if err := d.syncProtection(allURLs, currentState.AdvancedProtection); err != nil {
 		http.Error(w, "Failed to update hosts file", http.StatusInternalServerError)
 		return
 	}
@@ -378,7 +378,7 @@ func (d *Daemon) handleScopedLock(w http.ResponseWriter, r *http.Request, unlock
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
 		return
 	}
-	if err := d.syncHostsAndDoH(calculateBlocklist(groups, currentState.ActiveUnlocks), currentState.BlockDoHProviders); err != nil {
+	if err := d.syncProtection(calculateBlocklist(groups, currentState.ActiveUnlocks), currentState.AdvancedProtection); err != nil {
 		http.Error(w, "Failed to update hosts file", http.StatusInternalServerError)
 		return
 	}
@@ -576,7 +576,7 @@ func (d *Daemon) handleImportConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg.Policy.BreakGlassMinutes > 0 {
 		currentState.BreakGlassMinutes = cfg.Policy.BreakGlassMinutes
 	}
-	currentState.BlockDoHProviders = cfg.Policy.BlockDoHProviders
+	currentState.AdvancedProtection = cfg.Policy.AdvancedProtection
 
 	if err := d.Store.SaveState(currentState); err != nil {
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
@@ -693,7 +693,7 @@ func (d *Daemon) handleFriction(w http.ResponseWriter, r *http.Request) {
 	policy := model.FrictionPolicy{
 		AttemptsToday: attempts,
 		ExtraWait:     attempts * 60,
-		Challenges:    3 + attempts,
+		Challenges:    1 + attempts,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(policy)
@@ -711,12 +711,12 @@ func (d *Daemon) handleGroups(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(groups)
 }
 
-func (d *Daemon) syncHostsAndDoH(urlsToBlock []string, blockDoH bool) error {
+func (d *Daemon) syncProtection(urlsToBlock []string, advanced bool) error {
 	if err := hosts.Sync(d.Config.HostPath, urlsToBlock); err != nil {
 		return err
 	}
 
-	if !blockDoH {
+	if !advanced {
 		if d.sniActive {
 			d.sniProxy.Close()
 			redirectDel()

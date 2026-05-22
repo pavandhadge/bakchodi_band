@@ -216,8 +216,7 @@ func extract(d []byte) (string, bool) {
 
 	off := 34
 	off += 1 + int(b[off])
-
-	off += 2 + be16(b[off:])
+	off += 2 + (int(b[off])<<8 | int(b[off+1]))
 	if off > len(b) {
 		return "", false
 	}
@@ -225,56 +224,87 @@ func extract(d []byte) (string, bool) {
 	if off+2 > len(b) {
 		return "", false
 	}
-	el := be16(b[off:])
+	el := int(b[off])<<8 | int(b[off+1])
 	off += 2
 	end := off + el
 	if end > len(b) {
 		end = len(b)
 	}
+	if off+4 > end {
+		return "", false
+	}
 
 	ech := false
 	sniName := ""
+
+	t := int(b[off])<<8 | int(b[off+1])
+	l := int(b[off+2])<<8 | int(b[off+3])
+
+	if t == 0 && l > 5 && off+4+l <= end {
+		ll := int(b[off+4])<<8 | int(b[off+5])
+		if ll > 2 && off+6+ll <= off+4+l && b[off+6] == 0 {
+			nl := int(b[off+7])<<8 | int(b[off+8])
+			pos := off + 9
+			if nl > 0 && pos+nl <= off+4+l {
+				for j := 0; j < nl; j++ {
+					if b[pos+j] >= 'A' && b[pos+j] <= 'Z' {
+						s := unsafe.String(&b[pos], nl)
+						sniName = strings.ToLower(s)
+						goto next
+					}
+				}
+				sniName = unsafe.String(&b[pos], nl)
+			}
+		}
+	next:
+		off += 4 + l
+	} else {
+		if t == 0xFE0D {
+			ech = true
+		}
+		off += 4 + l
+	}
+
 	for off+4 <= end {
-		t := be16(b[off:])
-		l := be16(b[off+2:])
+		t := int(b[off])<<8 | int(b[off+1])
+		l := int(b[off+2])<<8 | int(b[off+3])
 		off += 4
 		if t == 0xFE0D {
 			ech = true
 		}
-		if t == 0 && l > 0 && off+l <= end && sniName == "" {
-			sniName = sni(b[off : off+l])
+		if t == 0 && l > 5 && off+l <= end && sniName == "" {
+			sniName = nameFromSNI(b, off, off+l)
 		}
 		off += l
 	}
 	return sniName, ech
 }
 
-func sni(d []byte) string {
-	if len(d) < 4 {
-		return ""
+
+
+func nameFromSNI(b []byte, off, end int) string {
+	ll := int(b[off])<<8 | int(b[off+1])
+	send := off + 2 + ll
+	if send > end {
+		send = end
 	}
-	ll := be16(d)
-	off := 2
-	end := off + ll
-	if end > len(d) {
-		end = len(d)
-	}
-	for off+3 < end {
-		if d[off] != 0 {
-			off += 3 + be16(d[off+1:])
+	for i := off + 2; i+3 < send; {
+		if b[i] != 0 {
+			i += 3 + (int(b[i+1])<<8 | int(b[i+2]))
 			continue
 		}
-		nl := be16(d[off+1:])
-		off += 3
-		if nl > 0 && off+nl <= end {
-			for i := 0; i < nl; i++ {
-				if d[off+i] >= 'A' && d[off+i] <= 'Z' {
-					return strings.ToLower(string(d[off : off+nl]))
+		nl := int(b[i+1])<<8 | int(b[i+2])
+		pos := i + 3
+		if nl > 0 && pos+nl <= send {
+			for j := 0; j < nl; j++ {
+				if b[pos+j] >= 'A' && b[pos+j] <= 'Z' {
+					s := unsafe.String(&b[pos], nl)
+					return strings.ToLower(s)
 				}
 			}
-			return unsafe.String(&d[off], nl)
+			return unsafe.String(&b[pos], nl)
 		}
-		off += nl
+		break
 	}
 	return ""
 }
