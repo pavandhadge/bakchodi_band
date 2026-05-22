@@ -27,6 +27,8 @@ const (
 	commandAllow
 	commandPanic
 	commandPlan
+	commandProtect
+	commandSettings
 )
 
 type targetKind int
@@ -45,6 +47,9 @@ const (
 	fieldValue
 	fieldHours
 	fieldReason
+	fieldBudget
+	fieldUnlock
+	fieldBreakGlass
 	fieldSubmit
 )
 
@@ -87,9 +92,13 @@ type Model struct {
 	target  targetKind
 	cursor  int
 
-	valueInput  textinput.Model
-	reasonInput textinput.Model
-	hours       int
+	valueInput    textinput.Model
+	reasonInput   textinput.Model
+	settingsInput textinput.Model
+	hours         int
+	budget        int
+	unlockMin     int
+	breakGlass    int
 
 	state  model.StateJSON
 	groups model.GroupMap
@@ -129,6 +138,11 @@ func InitialModel(cfg platform.Config) Model {
 	answer.CharLimit = 20
 	answer.Width = 16
 
+	settings := textinput.New()
+	settings.Placeholder = "value"
+	settings.CharLimit = 6
+	settings.Width = 10
+
 	token := ""
 	if data, err := os.ReadFile(cfg.TokenPath); err == nil {
 		token = strings.TrimSpace(string(data))
@@ -138,10 +152,14 @@ func InitialModel(cfg platform.Config) Model {
 		cfg:         cfg,
 		command:     commandBlock,
 		target:      targetURL,
-		valueInput:  value,
-		reasonInput: reason,
-		answerInput: answer,
+		valueInput:     value,
+		reasonInput:    reason,
+		settingsInput:  settings,
+		answerInput:    answer,
 		hours:       24,
+		budget:      model.DefaultDailyBudgetMinutes,
+		unlockMin:   model.DefaultUnlockMinutes,
+		breakGlass:  model.DefaultBreakGlassMinutes,
 		token:       token,
 	}
 	m.focusCurrentInput()
@@ -160,6 +178,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateMsg:
 		m.state = msg.state
 		m.loaded = true
+		if msg.state.DailyBudgetMinutes > 0 {
+			m.budget = msg.state.DailyBudgetMinutes
+		}
+		if msg.state.UnlockMinutes > 0 {
+			m.unlockMin = msg.state.UnlockMinutes
+		}
+		if msg.state.BreakGlassMinutes > 0 {
+			m.breakGlass = msg.state.BreakGlassMinutes
+		}
 		return m, nil
 	case groupsMsg:
 		m.groups = msg.groups
@@ -239,9 +266,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(-1)
 		return m, nil
 	case "left":
+		if m.command == commandSettings {
+			switch m.currentField() {
+			case fieldBudget, fieldUnlock, fieldBreakGlass:
+				goto textInput
+			}
+		}
 		m.adjust(-1)
 		return m, nil
 	case "right":
+		if m.command == commandSettings {
+			switch m.currentField() {
+			case fieldBudget, fieldUnlock, fieldBreakGlass:
+				goto textInput
+			}
+		}
 		m.adjust(1)
 		return m, nil
 	case "+", "=":
@@ -262,6 +301,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+textInput:
 	var cmd tea.Cmd
 	m, cmd = m.updateInput(msg)
 	return m, cmd
@@ -355,12 +395,33 @@ func (m *Model) nextChallenge() {
 }
 
 func (m *Model) move(delta int) {
+	m.syncSettingsField()
 	fields := m.fields()
 	if len(fields) == 0 {
 		return
 	}
 	m.cursor = (m.cursor + delta + len(fields)) % len(fields)
 	m.focusCurrentInput()
+}
+
+func (m *Model) syncSettingsField() {
+	if m.command != commandSettings {
+		return
+	}
+	switch m.currentField() {
+	case fieldBudget:
+		if v, err := strconv.Atoi(strings.TrimSpace(m.settingsInput.Value())); err == nil && v > 0 {
+			m.budget = v
+		}
+	case fieldUnlock:
+		if v, err := strconv.Atoi(strings.TrimSpace(m.settingsInput.Value())); err == nil && v > 0 {
+			m.unlockMin = v
+		}
+	case fieldBreakGlass:
+		if v, err := strconv.Atoi(strings.TrimSpace(m.settingsInput.Value())); err == nil && v > 0 {
+			m.breakGlass = v
+		}
+	}
 }
 
 func (m *Model) adjust(delta int) {
@@ -382,11 +443,22 @@ func (m *Model) focusCurrentInput() {
 	m.valueInput.Blur()
 	m.reasonInput.Blur()
 	m.answerInput.Blur()
+	m.settingsInput.Blur()
 	switch m.currentField() {
 	case fieldValue:
 		m.valueInput.Focus()
 	case fieldReason:
 		m.reasonInput.Focus()
+	case fieldBudget, fieldUnlock, fieldBreakGlass:
+		switch m.currentField() {
+		case fieldBudget:
+			m.settingsInput.SetValue(strconv.Itoa(m.budget))
+		case fieldUnlock:
+			m.settingsInput.SetValue(strconv.Itoa(m.unlockMin))
+		case fieldBreakGlass:
+			m.settingsInput.SetValue(strconv.Itoa(m.breakGlass))
+		}
+		m.settingsInput.Focus()
 	}
 }
 
@@ -397,6 +469,8 @@ func (m Model) updateInput(msg tea.Msg) (Model, tea.Cmd) {
 		m.valueInput, cmd = m.valueInput.Update(msg)
 	case fieldReason:
 		m.reasonInput, cmd = m.reasonInput.Update(msg)
+	case fieldBudget, fieldUnlock, fieldBreakGlass:
+		m.settingsInput, cmd = m.settingsInput.Update(msg)
 	}
 	return m, cmd
 }
@@ -415,6 +489,23 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 	if m.command == commandPlan {
 		m.pending.reason = strings.TrimSpace(m.reasonInput.Value())
+	}
+	if m.command == commandProtect {
+		m.pending.reason = strings.TrimSpace(m.reasonInput.Value())
+		m.working = true
+		m.message = "running"
+		m.err = false
+		return m, executeAction(m.cfg, m.token, m.pending)
+	}
+	if m.command == commandSettings {
+		m.syncSettingsField()
+		m.pending.budget = m.budget
+		m.pending.unlockMin = m.unlockMin
+		m.pending.breakGlass = m.breakGlass
+		m.working = true
+		m.message = "running"
+		m.err = false
+		return m, executeAction(m.cfg, m.token, m.pending)
 	}
 	if m.command == commandAllow || m.command == commandPanic {
 		m.startResistance()
@@ -460,6 +551,15 @@ func (m *Model) startResistance() {
 }
 
 func (m Model) validate() error {
+	if m.command == commandProtect {
+		if strings.TrimSpace(m.reasonInput.Value()) == "" {
+			return fmt.Errorf("reason is required")
+		}
+		return nil
+	}
+	if m.command == commandSettings {
+		return nil
+	}
 	if m.command != commandPlan && m.target != targetAll && strings.TrimSpace(m.valueInput.Value()) == "" {
 		if m.target == targetURL {
 			return fmt.Errorf("url is required")
@@ -478,6 +578,12 @@ func (m Model) validate() error {
 func (m Model) fields() []fieldKind {
 	if m.command == commandPlan {
 		return []fieldKind{fieldCommand, fieldHours, fieldReason, fieldSubmit}
+	}
+	if m.command == commandProtect {
+		return []fieldKind{fieldCommand, fieldReason, fieldSubmit}
+	}
+	if m.command == commandSettings {
+		return []fieldKind{fieldCommand, fieldBudget, fieldUnlock, fieldBreakGlass, fieldSubmit}
 	}
 	if m.target == targetAll {
 		return []fieldKind{fieldCommand, fieldTarget, fieldSubmit}
@@ -599,8 +705,13 @@ func (m Model) commandForm() string {
 	if m.command == commandPlan {
 		rows = append(rows, m.row(fieldHours, "hours", strconv.Itoa(m.hours)))
 	}
-	if m.command == commandPlan {
+	if m.command == commandPlan || m.command == commandProtect {
 		rows = append(rows, m.row(fieldReason, "reason", m.reasonInput.View()))
+	}
+	if m.command == commandSettings {
+		rows = append(rows, m.row(fieldBudget, "budget (min)", m.settingsInput.View()))
+		rows = append(rows, m.row(fieldUnlock, "unlock (min)", m.settingsInput.View()))
+		rows = append(rows, m.row(fieldBreakGlass, "break glass (min)", m.settingsInput.View()))
 	}
 	rows = append(rows, m.row(fieldSubmit, "run", "execute"))
 	rows = append(rows, "", mutedStyle.Render(m.fieldHelp()))
@@ -641,6 +752,10 @@ func (m Model) commandDescription() string {
 		return "Emergency unlock. This is slower, stricter, limited to a short window, and logged."
 	case commandPlan:
 		return "Create a no-break commitment so normal unlocks are blocked for the chosen hours."
+	case commandProtect:
+		return "Toggle advanced protection on or off. This controls whether the SNI proxy is active."
+	case commandSettings:
+		return "Adjust daily budget, unlock duration, and break glass duration."
 	default:
 		return ""
 	}
@@ -660,7 +775,16 @@ func (m Model) fieldHelp() string {
 	case fieldHours:
 		return "Choose how long the commitment should last. Use left/right or +/-."
 	case fieldReason:
+		if m.command == commandProtect {
+			return "Explain why you're toggling protection. This is logged."
+		}
 		return "Enter the reason that will be logged."
+	case fieldBudget:
+		return "Daily budget in minutes. Type a number."
+	case fieldUnlock:
+		return "Unlock duration in minutes. Type a number."
+	case fieldBreakGlass:
+		return "Break glass unlock duration in minutes. Type a number."
 	case fieldSubmit:
 		return m.submitHelp()
 	default:
@@ -678,6 +802,10 @@ func (m Model) submitHelp() string {
 		return "Start emergency flow: longer wait, harder math, enter reason, then unlock."
 	case commandPlan:
 		return "Create the commitment with the selected hours and reason."
+	case commandProtect:
+		return "Toggle advanced protection on/off."
+	case commandSettings:
+		return "Apply the new settings."
 	default:
 		return "Execute the selected action."
 	}
@@ -732,11 +860,14 @@ type actionResultMsg struct {
 	message string
 }
 type pendingAction struct {
-	command commandKind
-	target  targetKind
-	value   string
-	reason  string
-	hours   int
+	command    commandKind
+	target     targetKind
+	value      string
+	reason     string
+	hours      int
+	budget     int
+	unlockMin  int
+	breakGlass int
 }
 
 func loadState(cfg platform.Config, token string) tea.Cmd {
@@ -791,6 +922,16 @@ func executeAction(cfg platform.Config, token string, action pendingAction) tea.
 func requestFor(action pendingAction) (string, map[string]any) {
 	if action.command == commandPlan {
 		return "/commit", map[string]any{"hours": action.hours, "reason": action.reason}
+	}
+	if action.command == commandProtect {
+		return "/toggle-advanced-protection", map[string]any{"reason": action.reason}
+	}
+	if action.command == commandSettings {
+		return "/update-settings", map[string]any{
+			"daily_budget_minutes": action.budget,
+			"unlock_minutes":       action.unlockMin,
+			"break_glass_minutes":  action.breakGlass,
+		}
 	}
 
 	prefix := "lock"
@@ -876,7 +1017,7 @@ func httpGetClient(cfg platform.Config) http.Client {
 }
 
 func commandNames() []string {
-	return []string{"block", "allow", "panic", "plan"}
+	return []string{"block", "allow", "panic", "plan", "protect", "settings"}
 }
 
 func targetNames() []string {

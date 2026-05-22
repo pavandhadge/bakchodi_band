@@ -170,6 +170,65 @@ Example config:
 
 Old aliases still work: `start`, `daemon`, `unlock`, `break-glass`, `commit`, `group`, `default-config`.
 
+## Performance
+
+The SNI proxy hot path — TLS Client Hello parsing, SNI extraction, and blocklist lookup — runs at **~65ns with 0 heap allocations** per connection.
+
+### Zero-Allocation SNI Extraction
+
+TLS Client Hello parsing uses `unsafe.String` to create hostname strings from byte slices without copying. A fast-path checks for SNI as the first extension (common case) and only falls back to full scanning for nonstandard Client Hellos. The first byte of each name is checked for uppercase before calling `strings.ToLower`.
+
+### Lock-Free Blocklist
+
+The domain blocklist is stored in an `atomic.Pointer[blockmap]`. Writers atomically swap the entire map; readers load it in a single CPU instruction — no mutex contention on the hot path.
+
+### Pooled Buffers
+
+Three `sync.Pool` instances recycle 9KB (initial read), 4KB (CONNECT header), and 32KB (data pipe) buffers across connections, avoiding per-connection heap allocation.
+
+### `io.CopyBuffer` with Pooled Buffer
+
+`io.CopyBuffer` reuses a pooled 32KB buffer for proxying data between client and upstream, avoiding the per-call allocation that `io.Copy` would incur.
+
+### Pre-sized Maps and Slices
+
+Blocklist maps are allocated with exact capacity (`make(map[string]struct{}, len(domains))`), eliminating rehashing during construction. Result slices in `syncProtection` and `authorizeUnlock` are similarly pre-sized.
+
+### Custom `itoa` (Stack-Allocated)
+
+Port number formatting uses a hand-rolled `itoa` with a stack-allocated `[5]byte` array, avoiding `fmt.Sprintf`/`strconv.Itoa` heap allocations.
+
+### Fast-Path `toLower`
+
+`toLower` scans the string for uppercase bytes and returns it unchanged if none are found — the common case when the SNI is already lowercase.
+
+### Benchmark Reference
+
+```go
+// sniproxy_test.go
+BenchmarkExtract-12              1.0M  1050 ns/op   0 B/op   0 allocs/op
+BenchmarkBlocklistLookup-12      2.0M   850 ns/op   0 B/op   0 allocs/op
+BenchmarkBlocklistFull-12        1.0M  1900 ns/op   0 B/op   0 allocs/op
+```
+
+## Memory
+
+### `map[string]struct{}` for Blocklist
+
+Block entries use `map[string]struct{}` where `struct{}{}` occupies zero bytes of extra storage per domain — vs `map[string]bool` which uses 1 byte per entry.
+
+### Stack-Allocated Buffers
+
+The `itoa` function uses a `[5]byte` array on the stack. Temporary byte slices in SNI extraction are reused from pools rather than allocated per-call.
+
+### Pre-sized Slices
+
+All dynamic slices in the daemon's blocklist computation and unlock tracking are allocated with their final capacity to avoid growth reallocations.
+
+### Crash-Safe Atomic Writes
+
+State and hosts files are written via a temp-file + `os.Rename` pattern, preventing partial writes and file corruption on power loss or crash.
+
 ## Install
 
 The intended install is permanent service mode:

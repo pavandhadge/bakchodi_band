@@ -133,6 +133,9 @@ func normalizeState(st model.StateJSON) model.StateJSON {
 	if st.BreakGlassMinutes == 0 {
 		st.BreakGlassMinutes = model.DefaultBreakGlassMinutes
 	}
+	if !st.AdvancedProtection {
+		st.AdvancedProtection = true
+	}
 	if st.UsedBudgetByDate == nil {
 		st.UsedBudgetByDate = make(map[string]int)
 	}

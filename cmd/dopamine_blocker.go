@@ -87,6 +87,18 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}
+	case "advanced-protection":
+		reason := parseReasonFlag(os.Args[2:])
+		if err := client.New(cfg).ToggleAdvancedProtection(reason); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+	case "settings":
+		budget, unlockMin, breakGlassMin := parseSettingsFlags(os.Args[2:])
+		if err := client.New(cfg).UpdateSettings(budget, unlockMin, breakGlassMin); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
 	case "sample-config", "default-config":
 		file := parseOutputFlag(os.Args[2:])
 		if err := client.WriteDefaultConfig(file); err != nil {
@@ -204,6 +216,29 @@ func parseCommitFlags(args []string) (int, string) {
 	return *hours, *reason
 }
 
+func parseReasonFlag(args []string) string {
+	fs := flag.NewFlagSet("advanced-protection", flag.ExitOnError)
+	reason := fs.String("reason", "", "reason for toggling protection")
+	fs.StringVar(reason, "r", "", "reason for toggling protection")
+	fs.Usage = printUsage
+	_ = fs.Parse(args)
+	if *reason == "" {
+		fmt.Fprintln(os.Stderr, "Error: --reason is required")
+		os.Exit(1)
+	}
+	return *reason
+}
+
+func parseSettingsFlags(args []string) (int, int, int) {
+	fs := flag.NewFlagSet("settings", flag.ExitOnError)
+	budget := fs.Int("budget", 0, "daily budget in minutes")
+	unlock := fs.Int("unlock-minutes", 0, "unlock duration in minutes")
+	breakGlass := fs.Int("break-glass-minutes", 0, "break glass duration in minutes")
+	fs.Usage = printUsage
+	_ = fs.Parse(args)
+	return *budget, *unlock, *breakGlass
+}
+
 func parseTargetFlags(command string, args []string) (string, string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	url := fs.String("url", "", "target URL")
@@ -260,6 +295,7 @@ func printUsage() {
 	fmt.Println("  bakchodi plan --hours 24             - Prevent normal allows for a fixed period")
 	fmt.Println("  bakchodi add-group --name social --url x.com --url reddit.com")
 	fmt.Println("  bakchodi add-group --name social --file social.txt")
+	fmt.Println("  bakchodi advanced-protection          - Toggle advanced protection on/off")
 	fmt.Println("  bakchodi setup --file bakchodi.config.json")
 	fmt.Println("  bakchodi sample-config --out bakchodi.config.json")
 	fmt.Println("")

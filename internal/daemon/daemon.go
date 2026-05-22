@@ -86,6 +86,8 @@ func (d *Daemon) Run() error {
 	mux.HandleFunc("/friction", d.requireAuth(d.handleFriction))
 	mux.HandleFunc("/state", d.requireAuth(d.handleState))
 	mux.HandleFunc("/groups", d.requireAuth(d.handleGroups))
+	mux.HandleFunc("/toggle-advanced-protection", d.requireAuth(d.handleToggleAdvancedProtection))
+	mux.HandleFunc("/update-settings", d.requireAuth(d.handleUpdateSettings))
 
 	go d.runExpiryChecker()
 
@@ -709,6 +711,77 @@ func (d *Daemon) handleGroups(w http.ResponseWriter, r *http.Request) {
 	groups, _ := d.Store.LoadGroups()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(groups)
+}
+
+func (d *Daemon) handleToggleAdvancedProtection(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Reason == "" {
+		http.Error(w, "reason is required to toggle protection", http.StatusBadRequest)
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	currentState, _ := d.Store.LoadState()
+	currentState.AdvancedProtection = !currentState.AdvancedProtection
+
+	groups, _ := d.Store.LoadGroups()
+	urls := calculateBlocklist(groups, currentState.ActiveUnlocks)
+	if err := d.syncProtection(urls, currentState.AdvancedProtection); err != nil {
+		http.Error(w, "Failed to sync protection: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := d.Store.SaveState(currentState); err != nil {
+		d.syncProtection(urls, !currentState.AdvancedProtection)
+		http.Error(w, "Failed to save state", http.StatusInternalServerError)
+		return
+	}
+	if currentState.AdvancedProtection {
+		fmt.Fprintf(w, "Advanced protection enabled (reason: %s)\n", req.Reason)
+	} else {
+		fmt.Fprintf(w, "Advanced protection disabled (reason: %s)\n", req.Reason)
+	}
+}
+
+func (d *Daemon) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DailyBudgetMinutes *int `json:"daily_budget_minutes"`
+		UnlockMinutes      *int `json:"unlock_minutes"`
+		BreakGlassMinutes  *int `json:"break_glass_minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	currentState, _ := d.Store.LoadState()
+	if req.DailyBudgetMinutes != nil {
+		currentState.DailyBudgetMinutes = *req.DailyBudgetMinutes
+	}
+	if req.UnlockMinutes != nil {
+		currentState.UnlockMinutes = *req.UnlockMinutes
+	}
+	if req.BreakGlassMinutes != nil {
+		currentState.BreakGlassMinutes = *req.BreakGlassMinutes
+	}
+
+	if err := d.Store.SaveState(currentState); err != nil {
+		http.Error(w, "Failed to save state", http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, "Settings updated: budget=%d unlock=%d min break_glass=%d min\n",
+		currentState.DailyBudgetMinutes, currentState.UnlockMinutes, currentState.BreakGlassMinutes)
 }
 
 func (d *Daemon) syncProtection(urlsToBlock []string, advanced bool) error {

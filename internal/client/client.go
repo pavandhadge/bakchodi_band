@@ -111,6 +111,19 @@ func (c Client) ImportGroups(path string, merge bool) error {
 	return c.send("/import-groups", map[string]any{"groups": groups, "merge": merge})
 }
 
+func (c Client) ToggleAdvancedProtection(reason string) error {
+	return c.send("/toggle-advanced-protection", map[string]any{"reason": reason})
+}
+
+func (c Client) UpdateSettings(budget, unlockMin, breakGlassMin int) error {
+	payload := map[string]any{
+		"daily_budget_minutes":  budget,
+		"unlock_minutes":        unlockMin,
+		"break_glass_minutes":   breakGlassMin,
+	}
+	return c.send("/update-settings", payload)
+}
+
 func (c Client) ImportConfig(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -126,9 +139,10 @@ func (c Client) ImportConfig(path string) error {
 func WriteDefaultConfig(path string) error {
 	cfg := model.ConfigFile{
 		Policy: model.PolicyConfig{
-			DailyBudgetMinutes: model.DefaultDailyBudgetMinutes,
-			UnlockMinutes:      model.DefaultUnlockMinutes,
-			BreakGlassMinutes:  model.DefaultBreakGlassMinutes,
+			DailyBudgetMinutes:  model.DefaultDailyBudgetMinutes,
+			UnlockMinutes:       model.DefaultUnlockMinutes,
+			BreakGlassMinutes:   model.DefaultBreakGlassMinutes,
+			AdvancedProtection:  true,
 		},
 		Groups: map[string][]string{
 			"social": {"x.com", "instagram.com", "facebook.com", "reddit.com"},

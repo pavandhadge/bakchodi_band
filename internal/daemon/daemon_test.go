@@ -12,6 +12,7 @@ import (
 
 	"github.com/pavandhadge/dopamine_blocker/internal/model"
 	"github.com/pavandhadge/dopamine_blocker/internal/platform"
+	"github.com/pavandhadge/dopamine_blocker/internal/sniproxy"
 	"github.com/pavandhadge/dopamine_blocker/internal/state"
 )
 
@@ -27,6 +28,7 @@ func tmpDaemon(t *testing.T) (*Daemon, *state.Store) {
 		Config:   platform.Config{HostPath: hostsPath},
 		Store:    store,
 		token:    "test-token",
+		sniProxy: sniproxy.New(0),
 	}, &store
 }
 
