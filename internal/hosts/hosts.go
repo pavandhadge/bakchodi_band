@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -42,7 +43,7 @@ func Sync(path string, urlsToBlock []string) error {
 		finalOutput += "\n\n" + strings.Join(blockContent, "\n")
 	}
 
-	return os.WriteFile(path, []byte(strings.TrimSpace(finalOutput)+"\n"), 0644)
+	return writeAtomic(path, []byte(strings.TrimSpace(finalOutput)+"\n"))
 }
 
 func buildBlock(urls []string) []string {
@@ -95,4 +96,24 @@ func hostVariants(host string) []string {
 		return []string{host}
 	}
 	return []string{host, "www." + host}
+}
+
+func writeAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-hosts-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

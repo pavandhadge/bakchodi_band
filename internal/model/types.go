@@ -6,6 +6,7 @@ const (
 	DefaultDailyBudgetMinutes = 125
 	DefaultUnlockMinutes      = 25
 	DefaultBreakGlassMinutes  = 5
+	MaxAuditEvents = 1000
 )
 
 type GroupMap map[string][]string
@@ -21,6 +22,7 @@ type StateJSON struct {
 	DailyBudgetMinutes   int            `json:"daily_budget_minutes"`
 	UnlockMinutes        int            `json:"unlock_minutes"`
 	BreakGlassMinutes    int            `json:"break_glass_minutes"`
+	BlockDoHProviders    bool           `json:"block_doh_providers"`
 	UsedBudgetByDate     map[string]int `json:"used_budget_by_date"`
 	CommitmentUntil      time.Time      `json:"commitment_until"`
 	UnlockAttemptsByDate map[string]int `json:"unlock_attempts_by_date"`
@@ -56,9 +58,10 @@ type FrictionPolicy struct {
 }
 
 type PolicyConfig struct {
-	DailyBudgetMinutes int `json:"daily_budget_minutes"`
-	UnlockMinutes      int `json:"unlock_minutes"`
-	BreakGlassMinutes  int `json:"break_glass_minutes"`
+	DailyBudgetMinutes int  `json:"daily_budget_minutes"`
+	UnlockMinutes      int  `json:"unlock_minutes"`
+	BreakGlassMinutes  int  `json:"break_glass_minutes"`
+	BlockDoHProviders  bool `json:"block_doh_providers"`
 }
 
 type ConfigFile struct {
@@ -71,7 +74,18 @@ type GroupRequest struct {
 	URLs      []string `json:"urls"`
 }
 
+type DeleteGroupRequest struct {
+	GroupName string `json:"group_name"`
+}
+
+type RenameGroupRequest struct {
+	OldName string `json:"old_name"`
+	NewName string `json:"new_name"`
+}
+
 type GroupsImportRequest struct {
 	Groups GroupMap `json:"groups"`
 	Merge  bool     `json:"merge"`
 }
+
+

@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -38,14 +39,24 @@ func (s Store) EnsureDirs() error {
 }
 
 func (s Store) LoadState() (model.StateJSON, error) {
-	data, err := os.ReadFile(s.StatePath)
+	data, err := readFileSafe(s.StatePath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return defaultState(), nil
+		}
+		backupPath := s.StatePath + ".bak"
+		if backupData, berr := os.ReadFile(backupPath); berr == nil {
+			var state model.StateJSON
+			if berr := json.Unmarshal(backupData, &state); berr == nil {
+				return normalizeState(state), nil
+			}
+		}
 		return defaultState(), nil
 	}
 
 	var state model.StateJSON
 	if err := json.Unmarshal(data, &state); err != nil {
-		return model.StateJSON{}, err
+		return model.StateJSON{}, fmt.Errorf("corrupt state file, check %s.bak: %w", s.StatePath, err)
 	}
 	return normalizeState(state), nil
 }
@@ -54,16 +65,33 @@ func (s Store) SaveState(state model.StateJSON) error {
 	if err := os.MkdirAll(filepath.Dir(s.StatePath), 0755); err != nil {
 		return err
 	}
+
+	state.AuditEvents = capAuditLog(state.AuditEvents)
+
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.StatePath, data, 0644)
+
+	if err := backupFile(s.StatePath); err != nil {
+		return err
+	}
+	return writeFileAtomic(s.StatePath, data, 0644)
 }
 
 func (s Store) LoadGroups() (model.GroupMap, error) {
-	data, err := os.ReadFile(s.GroupsPath)
+	data, err := readFileSafe(s.GroupsPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return make(model.GroupMap), err
+		}
+		backupPath := s.GroupsPath + ".bak"
+		if backupData, berr := os.ReadFile(backupPath); berr == nil {
+			var groups model.GroupMap
+			if berr := json.Unmarshal(backupData, &groups); berr == nil {
+				return groups, nil
+			}
+		}
 		return make(model.GroupMap), err
 	}
 
@@ -82,7 +110,10 @@ func (s Store) SaveGroups(groups model.GroupMap) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.GroupsPath, data, 0644)
+	if err := backupFile(s.GroupsPath); err != nil {
+		return err
+	}
+	return writeFileAtomic(s.GroupsPath, data, 0644)
 }
 
 func defaultState() model.StateJSON {
@@ -111,6 +142,7 @@ func normalizeState(st model.StateJSON) model.StateJSON {
 	if st.AuditEvents == nil {
 		st.AuditEvents = []model.AuditEvent{}
 	}
+	st.AuditEvents = capAuditLog(st.AuditEvents)
 	return st
 }
 
@@ -128,6 +160,52 @@ func DefaultGroups() model.GroupMap {
 			"tiktok.com",
 			"twitch.tv",
 		},
-
 	}
+}
+
+func capAuditLog(events []model.AuditEvent) []model.AuditEvent {
+	if len(events) > model.MaxAuditEvents {
+		return events[len(events)-model.MaxAuditEvents:]
+	}
+	return events
+}
+
+func backupFile(path string) error {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return os.WriteFile(path+".bak", existing, 0644)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-*.json")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func readFileSafe(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }

@@ -12,16 +12,28 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pavandhadge/dopamine_blocker/internal/friction"
 	"github.com/pavandhadge/dopamine_blocker/internal/model"
 	"github.com/pavandhadge/dopamine_blocker/internal/platform"
 )
 
 type Client struct {
 	Config platform.Config
+	token  string
 }
 
 func New(cfg platform.Config) Client {
-	return Client{Config: cfg}
+	c := Client{Config: cfg}
+	c.loadAuthToken()
+	return c
+}
+
+func (c *Client) loadAuthToken() {
+	data, err := os.ReadFile(c.Config.TokenPath)
+	if err != nil {
+		return
+	}
+	c.token = strings.TrimSpace(string(data))
 }
 
 func (c Client) Block(targetType, target string) error {
@@ -30,14 +42,14 @@ func (c Client) Block(targetType, target string) error {
 
 func (c Client) Unlock(targetType, target string) error {
 	policy := c.FrictionPolicy()
-	ApplyResistance(targetType, target, policy)
+	ApplyResistance(friction.ParseTargetType(targetType), target, policy)
 	reason := promptReason()
 	return c.send("/"+targetType, map[string]any{"target": target, "reason": reason})
 }
 
 func (c Client) BreakGlass(targetType, target string) error {
 	policy := c.FrictionPolicy()
-	ApplyBreakGlassResistance(targetType, target, policy)
+	ApplyBreakGlassResistance(friction.ParseTargetType(targetType), target, policy)
 	reason := promptReason()
 	return c.send("/"+targetType, map[string]any{"target": target, "reason": reason, "break_glass": true})
 }
@@ -75,6 +87,20 @@ func (c Client) AddGroup(name string, urls []string, file string) error {
 		return fmt.Errorf("at least one URL is required")
 	}
 	return c.send("/add-group", map[string]any{"group_name": name, "urls": urls})
+}
+
+func (c Client) DeleteGroup(name string) error {
+	if name == "" {
+		return fmt.Errorf("group name is required")
+	}
+	return c.send("/delete-group", map[string]any{"group_name": name})
+}
+
+func (c Client) RenameGroup(oldName, newName string) error {
+	if oldName == "" || newName == "" {
+		return fmt.Errorf("both old and new group names are required")
+	}
+	return c.send("/rename-group", map[string]any{"old_name": oldName, "new_name": newName})
 }
 
 func (c Client) ImportGroups(path string, merge bool) error {
@@ -126,16 +152,19 @@ func (c Client) send(endpoint string, payload map[string]any) error {
 		return err
 	}
 
-	httpClient := http.Client{}
+	httpClient := c.httpClient()
 	url := "http://localhost" + endpoint
-	if c.Config.UsesUnixSocket() {
-		httpClient.Transport = &http.Transport{Dial: func(network, addr string) (net.Conn, error) {
-			return net.Dial(c.Config.SocketNetwork, c.Config.SocketAddress)
-		}}
-		url = "http://unix" + endpoint
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	resp, err := httpClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to daemon: %w", err)
 	}
@@ -150,15 +179,18 @@ func (c Client) send(endpoint string, payload map[string]any) error {
 }
 
 func (c Client) get(endpoint string) ([]byte, error) {
-	httpClient := http.Client{}
+	httpClient := c.httpClient()
 	url := "http://localhost" + endpoint
-	if c.Config.UsesUnixSocket() {
-		httpClient.Transport = &http.Transport{Dial: func(network, addr string) (net.Conn, error) {
-			return net.Dial(c.Config.SocketNetwork, c.Config.SocketAddress)
-		}}
-		url = "http://unix" + endpoint
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
 	}
-	resp, err := httpClient.Get(url)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -167,6 +199,27 @@ func (c Client) get(endpoint string) ([]byte, error) {
 		return nil, fmt.Errorf("daemon returned %s", resp.Status)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+func (c Client) httpClient() http.Client {
+	dial := c.dialFunc()
+	if dial == nil {
+		return http.Client{}
+	}
+	return http.Client{
+		Transport: &http.Transport{
+			Dial: dial,
+		},
+	}
+}
+
+func (c Client) dialFunc() func(network, addr string) (net.Conn, error) {
+	if c.Config.UsesUnixSocket() {
+		return func(network, addr string) (net.Conn, error) {
+			return net.Dial(c.Config.SocketNetwork, c.Config.SocketAddress)
+		}
+	}
+	return nil
 }
 
 func promptReason() string {

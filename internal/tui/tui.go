@@ -1,13 +1,12 @@
 package tui
 
 import (
-	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/pavandhadge/dopamine_blocker/internal/friction"
 	"github.com/pavandhadge/dopamine_blocker/internal/model"
 	"github.com/pavandhadge/dopamine_blocker/internal/platform"
 )
@@ -95,6 +95,7 @@ type Model struct {
 	groups model.GroupMap
 	policy model.FrictionPolicy
 	loaded bool
+	token  string
 
 	mode    modeKind
 	working bool
@@ -128,6 +129,11 @@ func InitialModel(cfg platform.Config) Model {
 	answer.CharLimit = 20
 	answer.Width = 16
 
+	token := ""
+	if data, err := os.ReadFile(cfg.TokenPath); err == nil {
+		token = strings.TrimSpace(string(data))
+	}
+
 	m := Model{
 		cfg:         cfg,
 		command:     commandBlock,
@@ -136,13 +142,14 @@ func InitialModel(cfg platform.Config) Model {
 		reasonInput: reason,
 		answerInput: answer,
 		hours:       24,
+		token:       token,
 	}
 	m.focusCurrentInput()
 	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(loadState(m.cfg), loadGroups(m.cfg), loadFriction(m.cfg), textinput.Blink)
+	return tea.Batch(loadState(m.cfg, m.token), loadGroups(m.cfg, m.token), loadFriction(m.cfg, m.token), textinput.Blink)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -166,7 +173,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = msg.message
 		m.err = !msg.success
 		if msg.success {
-			return m, tea.Batch(loadState(m.cfg), loadGroups(m.cfg), loadFriction(m.cfg))
+			return m, tea.Batch(loadState(m.cfg, m.token), loadGroups(m.cfg, m.token), loadFriction(m.cfg, m.token))
 		}
 		return m, nil
 	case waitTickMsg:
@@ -224,7 +231,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "r":
 		m.message = ""
-		return m, tea.Batch(loadState(m.cfg), loadGroups(m.cfg), loadFriction(m.cfg))
+		return m, tea.Batch(loadState(m.cfg, m.token), loadGroups(m.cfg, m.token), loadFriction(m.cfg, m.token))
 	case "down":
 		m.move(1)
 		return m, nil
@@ -276,7 +283,7 @@ func (m Model) handleReasonKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.working = true
 		m.message = "running"
 		m.err = false
-		return m, executeAction(m.cfg, m.pending)
+		return m, executeAction(m.cfg, m.token, m.pending)
 	}
 
 	var cmd tea.Cmd
@@ -294,9 +301,9 @@ func (m Model) handleChallengeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.answerInput.Reset()
 		if err != nil {
 			m.mistakes++
-			m.message = fmt.Sprintf("Invalid number. Mistake %d/3.", m.mistakes)
+			m.message = fmt.Sprintf("Invalid number. Mistake %d/%d.", m.mistakes, friction.MaxMistakes)
 			m.err = true
-			if m.mistakes >= 3 {
+			if m.mistakes >= friction.MaxMistakes {
 				return m.cancelResistance()
 			}
 			return m, nil
@@ -318,9 +325,9 @@ func (m Model) handleChallengeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.mistakes++
-		m.message = fmt.Sprintf("Wrong. Mistake %d/3.", m.mistakes)
+		m.message = fmt.Sprintf("Wrong. Mistake %d/%d.", m.mistakes, friction.MaxMistakes)
 		m.err = true
-		if m.mistakes >= 3 {
+		if m.mistakes >= friction.MaxMistakes {
 			return m.cancelResistance()
 		}
 		return m, nil
@@ -342,7 +349,7 @@ func (m Model) cancelResistance() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) nextChallenge() {
-	m.question, m.answer = generateMathChallenge()
+	m.question, m.answer = friction.GenerateMathChallenge()
 	m.answerInput.Reset()
 	m.answerInput.Focus()
 }
@@ -416,30 +423,38 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.working = true
 	m.message = "running"
 	m.err = false
-	return m, executeAction(m.cfg, m.pending)
+	return m, executeAction(m.cfg, m.token, m.pending)
 }
 
 func (m *Model) startResistance() {
-	waitSeconds, _, ok := resistanceTarget(m.pending.target, m.pending.value)
-	if !ok {
+	var targetType friction.TargetType
+	switch m.pending.target {
+	case targetAll:
+		targetType = friction.TargetAll
+	case targetGroup:
+		targetType = friction.TargetGroup
+	case targetURL:
+		targetType = friction.TargetURL
+	}
+	info := friction.ResistanceTarget(targetType, m.pending.value)
+	if !info.OK {
 		return
 	}
 	policy := m.policy
 	if policy.Challenges == 0 {
-		policy.Challenges = 3
+		policy.Challenges = friction.MinChallenges
 	}
+	waitSeconds := info.WaitSeconds + policy.ExtraWait
 	if m.pending.command == commandPanic {
-		waitSeconds = waitSeconds*3 + waitSeconds + policy.ExtraWait + 120
+		waitSeconds = info.WaitSeconds*4 + policy.ExtraWait + 120
 		policy.Challenges += 2
-	} else {
-		waitSeconds += policy.ExtraWait
 	}
 	m.mode = modeWait
 	m.working = true
 	m.waitRemaining = waitSeconds
 	m.required = policy.Challenges
-	if m.required < 3 {
-		m.required = 3
+	if m.required < friction.MinChallenges {
+		m.required = friction.MinChallenges
 	}
 	m.solved = 0
 	m.mistakes = 0
@@ -468,13 +483,7 @@ func (m Model) fields() []fieldKind {
 		return []fieldKind{fieldCommand, fieldHours, fieldReason, fieldSubmit}
 	}
 	if m.target == targetAll {
-		if m.command == commandBlock {
-			return []fieldKind{fieldCommand, fieldTarget, fieldSubmit}
-		}
 		return []fieldKind{fieldCommand, fieldTarget, fieldSubmit}
-	}
-	if m.command == commandBlock {
-		return []fieldKind{fieldCommand, fieldTarget, fieldValue, fieldSubmit}
 	}
 	return []fieldKind{fieldCommand, fieldTarget, fieldValue, fieldSubmit}
 }
@@ -673,13 +682,23 @@ func (m Model) submitHelp() string {
 }
 
 func (m Model) waitView() string {
-	_, targetName, _ := resistanceTarget(m.pending.target, m.pending.value)
+	var targetType friction.TargetType
+	switch m.pending.target {
+	case targetAll:
+		targetType = friction.TargetAll
+	case targetGroup:
+		targetType = friction.TargetGroup
+	case targetURL:
+		targetType = friction.TargetURL
+	}
+	info := friction.ResistanceTarget(targetType, m.pending.value)
+
 	if m.pending.command == commandPanic {
-		return warnStyle.Render("BREAK GLASS unlock requested for "+targetName) + "\n" +
+		return warnStyle.Render("BREAK GLASS unlock requested for "+info.Name) + "\n" +
 			fmt.Sprintf("This bypasses normal budget/commitment checks, is limited to %d minutes, and is logged.\n", model.DefaultBreakGlassMinutes) +
 			fmt.Sprintf("Wait %d seconds and solve all challenges to continue.", m.waitRemaining)
 	}
-	line := fmt.Sprintf("You're about to unlock %s\n", targetName)
+	line := fmt.Sprintf("You're about to unlock %s\n", info.Name)
 	if m.policy.AttemptsToday > 0 {
 		line += fmt.Sprintf("Escalation: %d unlock attempt(s) today, adding %d seconds and %d challenge(s).\n", m.policy.AttemptsToday, m.policy.ExtraWait, m.policy.Challenges)
 	}
@@ -689,11 +708,12 @@ func (m Model) waitView() string {
 
 func (m Model) challengeView() string {
 	return fmt.Sprintf(
-		"Challenge %d/%d: %s = ?\nMistakes: %d/3\n\nanswer: %s",
+		"Challenge %d/%d: %s = ?\nMistakes: %d/%d\n\nanswer: %s",
 		m.solved+1,
 		m.required,
 		m.question,
 		m.mistakes,
+		friction.MaxMistakes,
 		m.answerInput.View(),
 	)
 }
@@ -717,9 +737,9 @@ type pendingAction struct {
 	hours   int
 }
 
-func loadState(cfg platform.Config) tea.Cmd {
+func loadState(cfg platform.Config, token string) tea.Cmd {
 	return func() tea.Msg {
-		body, err := httpGet(cfg, "/state")
+		body, err := httpGet(cfg, "/state", token)
 		if err != nil {
 			return stateMsg{state: model.StateJSON{}}
 		}
@@ -729,9 +749,9 @@ func loadState(cfg platform.Config) tea.Cmd {
 	}
 }
 
-func loadGroups(cfg platform.Config) tea.Cmd {
+func loadGroups(cfg platform.Config, token string) tea.Cmd {
 	return func() tea.Msg {
-		body, err := httpGet(cfg, "/groups")
+		body, err := httpGet(cfg, "/groups", token)
 		if err != nil {
 			return groupsMsg{groups: model.GroupMap{}}
 		}
@@ -741,24 +761,24 @@ func loadGroups(cfg platform.Config) tea.Cmd {
 	}
 }
 
-func loadFriction(cfg platform.Config) tea.Cmd {
+func loadFriction(cfg platform.Config, token string) tea.Cmd {
 	return func() tea.Msg {
-		body, err := httpGet(cfg, "/friction")
+		body, err := httpGet(cfg, "/friction", token)
 		if err != nil {
-			return frictionMsg{policy: model.FrictionPolicy{Challenges: 3}}
+			return frictionMsg{policy: model.FrictionPolicy{Challenges: friction.MinChallenges}}
 		}
 		var policy model.FrictionPolicy
 		if err := json.Unmarshal(body, &policy); err != nil || policy.Challenges == 0 {
-			return frictionMsg{policy: model.FrictionPolicy{Challenges: 3}}
+			return frictionMsg{policy: model.FrictionPolicy{Challenges: friction.MinChallenges}}
 		}
 		return frictionMsg{policy: policy}
 	}
 }
 
-func executeAction(cfg platform.Config, action pendingAction) tea.Cmd {
+func executeAction(cfg platform.Config, token string, action pendingAction) tea.Cmd {
 	return func() tea.Msg {
 		endpoint, payload := requestFor(action)
-		body, err := httpPost(cfg, endpoint, payload)
+		body, err := httpPost(cfg, endpoint, payload, token)
 		if err != nil {
 			return actionResultMsg{success: false, message: err.Error()}
 		}
@@ -795,16 +815,19 @@ func requestFor(action pendingAction) (string, map[string]any) {
 	return endpoint, payload
 }
 
-func httpGet(cfg platform.Config, endpoint string) ([]byte, error) {
-	client := http.Client{}
+func httpGet(cfg platform.Config, endpoint string, token string) ([]byte, error) {
+	client := httpGetClient(cfg)
 	url := "http://localhost" + endpoint
-	if cfg.UsesUnixSocket() {
-		client.Transport = &http.Transport{Dial: func(network, addr string) (net.Conn, error) {
-			return net.Dial(cfg.SocketNetwork, cfg.SocketAddress)
-		}}
-		url = "http://unix" + endpoint
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
 	}
-	resp, err := client.Get(url)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -812,17 +835,21 @@ func httpGet(cfg platform.Config, endpoint string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-func httpPost(cfg platform.Config, endpoint string, payload map[string]any) ([]byte, error) {
+func httpPost(cfg platform.Config, endpoint string, payload map[string]any, token string) ([]byte, error) {
 	data, _ := json.Marshal(payload)
-	client := http.Client{}
+	client := httpGetClient(cfg)
 	url := "http://localhost" + endpoint
-	if cfg.UsesUnixSocket() {
-		client.Transport = &http.Transport{Dial: func(network, addr string) (net.Conn, error) {
-			return net.Dial(cfg.SocketNetwork, cfg.SocketAddress)
-		}}
-		url = "http://unix" + endpoint
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(data)))
+	if err != nil {
+		return nil, err
 	}
-	resp, err := client.Post(url, "application/json", strings.NewReader(string(data)))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
 	}
@@ -832,6 +859,18 @@ func httpPost(cfg platform.Config, endpoint string, payload map[string]any) ([]b
 		return nil, fmt.Errorf("%s", strings.TrimSpace(string(body)))
 	}
 	return body, nil
+}
+
+func httpGetClient(cfg platform.Config) http.Client {
+	client := http.Client{}
+	if cfg.UsesUnixSocket() {
+		client.Transport = &http.Transport{
+			Dial: func(network, addr string) (net.Conn, error) {
+				return net.Dial(cfg.SocketNetwork, cfg.SocketAddress)
+			},
+		}
+	}
+	return client
 }
 
 func commandNames() []string {
@@ -881,47 +920,6 @@ func waitTick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return waitTickMsg(t)
 	})
-}
-
-func resistanceTarget(target targetKind, value string) (int, string, bool) {
-	switch target {
-	case targetAll:
-		return 60, "all sites", true
-	case targetGroup:
-		return 60, "group: " + value, true
-	case targetURL:
-		return 30, "URL: " + value, true
-	default:
-		return 0, "", false
-	}
-}
-
-func generateMathChallenge() (string, int) {
-	a := randomInt(37, 96)
-	b := randomInt(12, 39)
-	c := randomInt(120, 460)
-	d := randomInt(7, 28)
-	e := randomInt(4, 17)
-
-	switch randomInt(0, 2) {
-	case 0:
-		return fmt.Sprintf("(%d x %d) - %d + (%d x %d)", a, b, c, d, e), (a*b - c) + (d * e)
-	case 1:
-		return fmt.Sprintf("(%d + %d) x %d - %d", a, c, e, b*d), (a+c)*e - (b * d)
-	default:
-		return fmt.Sprintf("(%d x %d) + %d - (%d x %d)", c, e, a, b, d), (c*e + a) - (b * d)
-	}
-}
-
-func randomInt(min, max int) int {
-	if max < min {
-		min, max = max, min
-	}
-	n, err := crand.Int(crand.Reader, big.NewInt(int64(max-min+1)))
-	if err != nil {
-		return min
-	}
-	return min + int(n.Int64())
 }
 
 func Run(cfg platform.Config) error {

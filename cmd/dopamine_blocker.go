@@ -63,6 +63,18 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}
+	case "delete-group":
+		name := parseDeleteGroupFlag(os.Args[2:])
+		if err := client.New(cfg).DeleteGroup(name); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+	case "rename-group":
+		oldName, newName := parseRenameGroupFlags(os.Args[2:])
+		if err := client.New(cfg).RenameGroup(oldName, newName); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
 	case "import-groups":
 		file, merge := parseImportGroupsFlags(os.Args[2:])
 		if err := client.New(cfg).ImportGroups(file, merge); err != nil {
@@ -111,6 +123,34 @@ func parseGroupFlags(args []string) (string, []string, string) {
 	fs.Usage = printUsage
 	_ = fs.Parse(args)
 	return *name, urls, *file
+}
+
+func parseDeleteGroupFlag(args []string) string {
+	fs := flag.NewFlagSet("delete-group", flag.ExitOnError)
+	name := fs.String("name", "", "group name to delete")
+	fs.StringVar(name, "n", "", "group name to delete")
+	fs.Usage = printUsage
+	_ = fs.Parse(args)
+	if *name == "" {
+		fmt.Fprintln(os.Stderr, "Error: --name is required")
+		os.Exit(1)
+	}
+	return *name
+}
+
+func parseRenameGroupFlags(args []string) (string, string) {
+	fs := flag.NewFlagSet("rename-group", flag.ExitOnError)
+	oldName := fs.String("old", "", "current group name")
+	newName := fs.String("new", "", "new group name")
+	fs.StringVar(oldName, "o", "", "current group name")
+	fs.StringVar(newName, "n", "", "new group name")
+	fs.Usage = printUsage
+	_ = fs.Parse(args)
+	if *oldName == "" || *newName == "" {
+		fmt.Fprintln(os.Stderr, "Error: --old and --new are required")
+		os.Exit(1)
+	}
+	return *oldName, *newName
 }
 
 func parseImportGroupsFlags(args []string) (string, bool) {

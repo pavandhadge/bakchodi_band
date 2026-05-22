@@ -2,25 +2,24 @@ package client
 
 import (
 	"bufio"
-	crand "crypto/rand"
 	"fmt"
-	"math/big"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pavandhadge/dopamine_blocker/internal/friction"
 	"github.com/pavandhadge/dopamine_blocker/internal/model"
 )
 
-func ApplyResistance(targetType, target string, policy model.FrictionPolicy) {
-	waitSeconds, targetName, ok := resistanceTarget(targetType, target)
-	if !ok {
+func ApplyResistance(targetType friction.TargetType, target string, policy model.FrictionPolicy) {
+	info := friction.ResistanceTarget(targetType, target)
+	if !info.OK {
 		return
 	}
-	waitSeconds += policy.ExtraWait
+	waitSeconds := info.WaitSeconds + policy.ExtraWait
 
-	fmt.Printf("\nYou're about to unlock %s\n", targetName)
+	fmt.Printf("\nYou're about to unlock %s\n", info.Name)
 	if policy.AttemptsToday > 0 {
 		fmt.Printf("Escalation: %d unlock attempt(s) today, adding %d seconds and %d challenge(s).\n", policy.AttemptsToday, policy.ExtraWait, policy.Challenges)
 	}
@@ -32,15 +31,15 @@ func ApplyResistance(targetType, target string, policy model.FrictionPolicy) {
 	fmt.Println("\n\nTime's up.")
 
 	requiredCorrect := policy.Challenges
-	if requiredCorrect < 3 {
-		requiredCorrect = 3
+	if requiredCorrect < friction.MinChallenges {
+		requiredCorrect = friction.MinChallenges
 	}
-	maxMistakes := 3
+	maxMistakes := friction.MaxMistakes
 
 	reader := bufio.NewReader(os.Stdin)
 	mistakes := 0
 	for solved := 0; solved < requiredCorrect; {
-		question, answer := generateMathChallenge()
+		question, answer := friction.GenerateMathChallenge()
 		fmt.Printf("\nChallenge %d/%d: %s = ? ", solved+1, requiredCorrect, question)
 
 		input, _ := reader.ReadString('\n')
@@ -76,14 +75,14 @@ func ApplyResistance(targetType, target string, policy model.FrictionPolicy) {
 	os.Exit(0)
 }
 
-func ApplyBreakGlassResistance(targetType, target string, policy model.FrictionPolicy) {
-	waitSeconds, targetName, ok := resistanceTarget(targetType, target)
-	if !ok {
+func ApplyBreakGlassResistance(targetType friction.TargetType, target string, policy model.FrictionPolicy) {
+	info := friction.ResistanceTarget(targetType, target)
+	if !info.OK {
 		return
 	}
-	waitSeconds *= 3
+	waitSeconds := info.WaitSeconds * 3
 
-	fmt.Printf("\nBREAK GLASS unlock requested for %s\n", targetName)
+	fmt.Printf("\nBREAK GLASS unlock requested for %s\n", info.Name)
 	fmt.Printf("This bypasses normal budget/commitment checks, is limited to %d minutes, and is logged.\n", 5)
 	fmt.Printf("Wait %d seconds and solve all challenges to continue.\n\n", waitSeconds)
 	for i := waitSeconds; i > 0; i-- {
@@ -94,45 +93,4 @@ func ApplyBreakGlassResistance(targetType, target string, policy model.FrictionP
 	policy.ExtraWait += 120
 	policy.Challenges += 2
 	ApplyResistance(targetType, target, policy)
-}
-
-func resistanceTarget(targetType, target string) (int, string, bool) {
-	switch targetType {
-	case "unlock":
-		return 60, "all sites", true
-	case "unlock-group":
-		return 60, "group: " + target, true
-	case "unlock-url":
-		return 30, "URL: " + target, true
-	default:
-		return 0, "", false
-	}
-}
-
-func generateMathChallenge() (string, int) {
-	a := randomInt(37, 96)
-	b := randomInt(12, 39)
-	c := randomInt(120, 460)
-	d := randomInt(7, 28)
-	e := randomInt(4, 17)
-
-	switch randomInt(0, 2) {
-	case 0:
-		return fmt.Sprintf("(%d x %d) - %d + (%d x %d)", a, b, c, d, e), (a*b - c) + (d * e)
-	case 1:
-		return fmt.Sprintf("(%d + %d) x %d - %d", a, c, e, b*d), (a+c)*e - (b * d)
-	default:
-		return fmt.Sprintf("(%d x %d) + %d - (%d x %d)", c, e, a, b, d), (c*e + a) - (b * d)
-	}
-}
-
-func randomInt(min, max int) int {
-	if max < min {
-		min, max = max, min
-	}
-	n, err := crand.Int(crand.Reader, big.NewInt(int64(max-min+1)))
-	if err != nil {
-		return min
-	}
-	return min + int(n.Int64())
 }

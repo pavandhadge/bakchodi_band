@@ -13,6 +13,8 @@ type Config struct {
 	SocketAddress string
 	StatePath     string
 	GroupsPath    string
+	TokenPath     string
+	DataDir       string
 }
 
 const (
@@ -24,7 +26,7 @@ func DefaultConfig() Config {
 	cfg := Config{OS: runtime.GOOS}
 	cfg.HostPath = hostsFilePath(cfg.OS)
 	cfg.SocketNetwork, cfg.SocketAddress = socketAddress(cfg.OS)
-	cfg.StatePath, cfg.GroupsPath = stateAndGroupsPath(cfg.OS)
+	cfg.StatePath, cfg.GroupsPath, cfg.TokenPath, cfg.DataDir = statePaths(cfg.OS)
 	return cfg
 }
 
@@ -58,17 +60,21 @@ func socketAddress(goos string) (string, string) {
 	}
 }
 
-func stateAndGroupsPath(goos string) (string, string) {
+func statePaths(goos string) (string, string, string, string) {
+	var base string
 	switch goos {
 	case "windows":
-		base := filepath.Join(os.Getenv("ProgramData"), "bakchodi_band")
+		base = filepath.Join(os.Getenv("ProgramData"), "bakchodi_band")
 		if os.Getenv("ProgramData") == "" {
 			base = `C:\ProgramData\bakchodi_band`
 		}
-		return filepath.Join(base, "state.json"), filepath.Join(base, "groups.json")
 	case "darwin", "linux":
-		return "/var/lib/bakchodi_band/state.json", "/var/lib/bakchodi_band/groups.json"
+		base = "/var/lib/bakchodi_band"
 	default:
-		return "/tmp/bakchodi_band/state.json", "/tmp/bakchodi_band/groups.json"
+		base = "/tmp/bakchodi_band"
 	}
+	return filepath.Join(base, "state.json"),
+		filepath.Join(base, "groups.json"),
+		filepath.Join(base, "auth_token"),
+		base
 }
